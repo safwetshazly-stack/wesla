@@ -1,0 +1,88 @@
+version: '3.9'
+
+services:
+  # ─── PostgreSQL ───────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: wasla_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wasla
+      POSTGRES_PASSWORD: wasla_secret_2024
+      POSTGRES_DB: wasla_db
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/prisma/seed.sql:/docker-entrypoint-initdb.d/seed.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U wasla -d wasla_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: wasla_redis
+    restart: unless-stopped
+    command: redis-server --requirepass wasla_redis_2024 --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', 'wasla_redis_2024', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Backend API ──────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wasla_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://wasla:wasla_secret_2024@postgres:5432/wasla_db
+      REDIS_URL: redis://:wasla_redis_2024@redis:6379
+      JWT_SECRET: wasla_jwt_super_secret_change_in_production_2024
+      JWT_REFRESH_SECRET: wasla_refresh_super_secret_change_in_production_2024
+      PORT: 3001
+      FRONTEND_URL: http://localhost:3000
+    ports:
+      - '3001:3001'
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # ─── Frontend ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: wasla_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_URL: http://localhost:3001
+      VITE_WS_URL: ws://localhost:3001
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host
+
+volumes:
+  postgres_data:
+  redis_data:

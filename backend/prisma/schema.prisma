@@ -1,0 +1,386 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────
+
+enum UserType {
+  HELPER
+  SEEKER
+  ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  SUSPENDED
+  REVOKED
+}
+
+enum ExperienceLevel {
+  BEGINNER
+  INTERMEDIATE
+  EXPERT
+}
+
+enum SessionType {
+  VOICE
+  VIDEO
+  CHAT
+}
+
+enum SessionStatus {
+  REQUESTED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+enum PaymentMethod {
+  VODAFONE_CASH
+  ORANGE_CASH
+  ETISALAT_CASH
+  CREDIT_CARD
+  MEEZA
+  WALLET_BALANCE
+}
+
+enum PaymentStatus {
+  PENDING
+  ESCROWED
+  RELEASED
+  REFUNDED
+  FAILED
+}
+
+enum DisputeStatus {
+  OPEN
+  IN_MEDIATION
+  RESOLVED
+  ESCALATED
+  CLOSED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+enum NotificationType {
+  SESSION_REQUEST
+  SESSION_ACCEPTED
+  SESSION_DECLINED
+  SESSION_REMINDER
+  SESSION_STARTED
+  SESSION_COMPLETED
+  SESSION_CANCELLED
+  PAYMENT_RECEIVED
+  PAYMENT_FAILED
+  PAYOUT_INITIATED
+  PAYOUT_COMPLETED
+  LOW_WALLET_BALANCE
+  REFUND_PROCESSED
+  VERIFICATION_APPROVED
+  VERIFICATION_REJECTED
+  NEW_REVIEW
+  SECURITY_ALERT
+  PLATFORM_ANNOUNCEMENT
+}
+
+// ─── Models ──────────────────────────────────────────────────
+
+model User {
+  id                  String             @id @default(uuid())
+  email               String             @unique
+  phoneNumber         String             @unique
+  nationalId          String?            @unique
+  fullName            String
+  passwordHash        String
+  userType            UserType
+  verificationStatus  VerificationStatus @default(PENDING)
+  profileImageUrl     String?
+  bio                 String?
+  governorate         String?
+  city                String?
+  languages           String[]           @default([])
+
+  // Helper-specific fields
+  skills              String[]           @default([])
+  experienceLevel     ExperienceLevel?
+  hourlyRateEgp       Decimal?           @db.Decimal(10, 2)
+  availability        Json?
+  ratingAvg           Decimal            @default(0) @db.Decimal(3, 2)
+  totalSessions       Int                @default(0)
+  totalEarningsEgp    Decimal            @default(0) @db.Decimal(12, 2)
+  responseTimeMinutes Int?
+
+  // Wallet
+  walletBalanceEgp    Decimal            @default(0) @db.Decimal(12, 2)
+
+  // Security
+  twoFactorEnabled    Boolean            @default(false)
+  twoFactorSecret     String?
+  loginAttempts       Int                @default(0)
+  lockedUntil         DateTime?
+  lastActiveAt        DateTime?
+
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  // Relations
+  helperSessions      Session[]          @relation("HelperSessions")
+  seekerSessions      Session[]          @relation("SeekerSessions")
+  reviewsGiven        Review[]           @relation("ReviewsGiven")
+  reviewsReceived     Review[]           @relation("ReviewsReceived")
+  payments            Payment[]
+  payouts             Payout[]
+  notifications       Notification[]
+  disputesInitiated   Dispute[]          @relation("DisputeInitiator")
+  refreshTokens       RefreshToken[]
+  verificationDocs    VerificationDoc[]
+  savedHelpers        SavedHelper[]      @relation("SeekersWhoSaved")
+  savedBySeekers      SavedHelper[]      @relation("HelpersWhoAreSaved")
+  sessions            UserSession[]
+
+  @@index([userType, verificationStatus])
+  @@index([governorate, skills])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model UserSession {
+  id           String   @id @default(uuid())
+  userId       String
+  deviceInfo   String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_sessions")
+}
+
+model VerificationDoc {
+  id         String   @id @default(uuid())
+  userId     String
+  docType    String
+  fileUrl    String
+  status     String   @default("pending")
+  reviewNote String?
+  reviewedAt DateTime?
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("verification_docs")
+}
+
+model Session {
+  id                   String        @id @default(uuid())
+  helperId             String
+  seekerId             String
+  sessionType          SessionType
+  scheduledStart       DateTime
+  actualStart          DateTime?
+  actualEnd            DateTime?
+  durationMinutes      Int
+  priceEgp             Decimal       @db.Decimal(10, 2)
+  platformFeeEgp       Decimal       @db.Decimal(10, 2)
+  helperEarningsEgp    Decimal       @db.Decimal(10, 2)
+  platformFeePercent   Decimal       @default(10) @db.Decimal(5, 2)
+  status               SessionStatus @default(REQUESTED)
+  description          String?
+  cancellationReason   String?
+  cancellationBy       String?
+  roomId               String?       @unique
+  recordingUrl         String?
+  recordingConsent     Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  helper    User      @relation("HelperSessions", fields: [helperId], references: [id])
+  seeker    User      @relation("SeekerSessions", fields: [seekerId], references: [id])
+  payment   Payment?
+  reviews   Review[]
+  dispute   Dispute?
+  messages  Message[]
+
+  @@index([helperId, status])
+  @@index([seekerId, status])
+  @@index([scheduledStart])
+  @@map("sessions")
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  sessionId       String        @unique
+  userId          String
+  amountEgp       Decimal       @db.Decimal(10, 2)
+  feeEgp          Decimal       @db.Decimal(10, 2)
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  gatewayRef      String?       @unique
+  gatewayOrderId  String?
+  idempotencyKey  String        @unique
+  releasedAt      DateTime?
+  refundedAt      DateTime?
+  refundReason    String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  session Session @relation(fields: [sessionId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([userId, status])
+  @@map("payments")
+}
+
+model Payout {
+  id              String   @id @default(uuid())
+  helperId        String
+  amountEgp       Decimal  @db.Decimal(10, 2)
+  method          String
+  walletNumber    String?
+  status          String   @default("pending")
+  processedAt     DateTime?
+  gatewayRef      String?
+  createdAt       DateTime @default(now())
+
+  helper User @relation(fields: [helperId], references: [id])
+
+  @@index([helperId])
+  @@map("payouts")
+}
+
+model Review {
+  id             String   @id @default(uuid())
+  sessionId      String
+  reviewerId     String
+  revieweeId     String
+  ratingOverall  Int
+  ratingExpertise Int?
+  ratingComm     Int?
+  ratingValue    Int?
+  ratingPunct    Int?
+  comment        String?
+  privateNote    String?
+  publishedAt    DateTime?
+  isPublished    Boolean  @default(false)
+  helpfulCount   Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  session  Session @relation(fields: [sessionId], references: [id])
+  reviewer User    @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+  reviewee User    @relation("ReviewsReceived", fields: [revieweeId], references: [id])
+
+  @@unique([sessionId, reviewerId])
+  @@index([revieweeId, isPublished])
+  @@map("reviews")
+}
+
+model Dispute {
+  id            String        @id @default(uuid())
+  sessionId     String        @unique
+  initiatorId   String
+  category      String
+  description   String
+  status        DisputeStatus @default(OPEN)
+  resolution    String?
+  resolvedBy    String?
+  resolvedAt    DateTime?
+  evidence      Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  session   Session @relation(fields: [sessionId], references: [id])
+  initiator User    @relation("DisputeInitiator", fields: [initiatorId], references: [id])
+
+  @@map("disputes")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  sessionId String
+  senderId  String
+  content   String
+  type      String   @default("text")
+  fileUrl   String?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId])
+  @@map("messages")
+}
+
+model Notification {
+  id        String              @id @default(uuid())
+  userId    String
+  type      NotificationType
+  channel   NotificationChannel
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean             @default(false)
+  sentAt    DateTime?
+  readAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model SavedHelper {
+  id        String   @id @default(uuid())
+  seekerId  String
+  helperId  String
+  createdAt DateTime @default(now())
+
+  seeker User @relation("SeekersWhoSaved", fields: [seekerId], references: [id])
+  helper User @relation("HelpersWhoAreSaved", fields: [helperId], references: [id])
+
+  @@unique([seekerId, helperId])
+  @@map("saved_helpers")
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  phone     String
+  code      String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+  @@map("otp_codes")
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
